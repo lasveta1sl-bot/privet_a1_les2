@@ -182,7 +182,13 @@ function renderHome(){
 function pendingInfo(n){let s=DATA.steps.find(x=>x.n===n);setView(`<div class="eyebrow">Блок ${n}</div><h2>${esc(s.title)}</h2><div class="panel"><p class="instruction">${esc(s.instruction)}</p><p class="en">${esc(s.instruction_en)}</p><p>Для этого блока пока нет полного комплекта записей. Задания сохранены и будут доступны после подключения аудио.</p><p>В банке: ${s.items.length} позиций. Подходящий звук уже есть для ${s.ready_count}.</p><details><summary>Посмотреть языковой материал</summary><p>${esc([...new Set(s.items.flatMap(x=>x.audio_text))].join('; '))}</p></details><button class="primary" id="back">К лестнице · Back</button></div>`);$('#back').onclick=goHome}
 function gallery(){const galleryJobs=['учитель','преподаватель',...DATA.jobs.filter(w=>w!=='учитель'&&w!=='преподаватель')];setView(`<div class="eyebrow">Словарь · Occupations</div><h2>Профессии в картинках</h2><p class="en">Посмотрите карточки перед заданием. Look through the cards before you practise.</p><div class="gallery">${galleryJobs.map(w=>`<figure>${illustration(w)}<figcaption>${esc(w)}</figcaption>${w==='учитель'?'<p class="en">Школа · School<br>Занятие с детьми</p>':w==='преподаватель'?'<p class="en">Университет · University<br>Занятие со взрослыми студентами</p>':''}</figure>`).join('')}</div><button id="back" class="primary">К лестнице · Back</button>`);$('#back').onclick=goHome}
 function selectTasks(s){let count=s.count,order=(a,b)=>{let aa=save.stats[a.id]||{},bb=save.stats[b.id]||{};return (bb.lastWrong?1:0)-(aa.lastWrong?1:0)|| (aa.times||0)-(bb.times||0)||a.id.localeCompare(b.id)};let pool=[...s.items].sort(order);
- if(s.families){let picked=[];s.families.forEach((_,fi)=>{let groups=['m','f','n','pl'];groups.forEach((g,i)=>picked.push(...pool.filter(x=>x.family===fi&&x.gender===g).slice(0,i===fi%4?3:4)))});return picked}
+ if(s.families){
+  const seen=new Set(),wordUse=new Map();for(const t of pool)wordUse.set(t.prompt,(wordUse.get(t.prompt)||0)+(save.stats[t.id]?.times||0));
+  const ranked=shuffled(pool).sort((a,b)=>(save.stats[b.id]?.lastWrong?1:0)-(save.stats[a.id]?.lastWrong?1:0)||(wordUse.get(a.prompt)||0)-(wordUse.get(b.prompt)||0)||(save.stats[a.id]?.times||0)-(save.stats[b.id]?.times||0));
+  const families=s.families.map((_,fi)=>fi).sort((a,b)=>pool.filter(t=>t.family===b&&save.stats[t.id]?.lastWrong).length-pool.filter(t=>t.family===a&&save.stats[t.id]?.lastWrong).length),byFamily=new Map();
+  for(const fi of families){let picked=[];['m','f','n','pl'].forEach((g,i)=>{const chosen=ranked.filter(t=>t.family===fi&&t.gender===g&&!seen.has(t.prompt)).slice(0,i===fi%4?3:4);for(const t of chosen)seen.add(t.prompt);picked.push(...chosen)});byFamily.set(fi,shuffled(picked))}
+  return s.families.flatMap((_,fi)=>byFamily.get(fi))
+ }
  if(s.n===1){
   const counts=new Map();for(const t of pool)counts.set(t.contrast_group,(counts.get(t.contrast_group)||0)+(save.stats[t.id]?.times||0));
   const groups=shuffled([...new Set(pool.map(t=>t.consonant_group))]);
@@ -210,8 +216,24 @@ function selectTasks(s){let count=s.count,order=(a,b)=>{let aa=save.stats[a.id]|
   const picked=groups.slice(0,count).map(group=>shuffled(group).sort((a,b)=>(save.stats[b.id]?.lastWrong?1:0)-(save.stats[a.id]?.lastWrong?1:0)||(save.stats[a.id]?.times||0)-(save.stats[b.id]?.times||0))[0]);
   const result=shuffled(picked);if(result.length>1&&pairKey(result[0])===pairKey(s.demo))result.push(result.shift());return result
  }
- if(s.n===12){let chosen=[];['А','Б','В','Г','Д'].forEach((x,i)=>chosen.push(...pool.filter(t=>t.series===x).slice(0,[4,4,4,2,1][i])));return chosen}
- return pool.slice(0,count)
+ if(s.n===3){
+  const wordPair=new Map(),pairs=new Map();
+  for(const t of s.items){const heard=t.audio_text[0];if(t.prompt!==heard){const key=JSON.stringify([t.prompt,heard].sort());wordPair.set(t.prompt,key);wordPair.set(heard,key)}}
+  for(const t of s.items){const key=wordPair.get(t.prompt)||JSON.stringify([t.prompt]);if(!pairs.has(key))pairs.set(key,[]);pairs.get(key).push(t)}
+  const yes='Совпадает',no='Не совпадает',used=(group,key)=>group.filter(t=>t.key===key).reduce((n,t)=>n+(save.stats[t.id]?.times||0),0);
+  const wrong=group=>group.some(t=>save.stats[t.id]?.lastWrong)?1:0;
+  const round=Math.floor(s.items.reduce((n,t)=>n+(save.stats[t.id]?.times||0),0)/count),same=Math.floor(count/2)+(round%2);
+  const keys=shuffled([...Array(same).fill(yes),...Array(count-same).fill(no)]),groups=shuffled([...pairs.values()]);
+  groups.sort((a,b)=>wrong(b)-wrong(a)||Math.abs(used(b,yes)-used(b,no))-Math.abs(used(a,yes)-used(a,no))||used(a,yes)+used(a,no)-used(b,yes)-used(b,no));
+  const picked=groups.slice(0,count).map(group=>{
+   const retry=group.find(t=>save.stats[t.id]?.lastWrong&&keys.includes(t.key));
+   let desired=retry?retry.key:used(group,yes)<used(group,no)?yes:used(group,no)<used(group,yes)?no:keys[0];if(!keys.includes(desired))desired=keys[0];keys.splice(keys.indexOf(desired),1);
+   return shuffled(group.filter(t=>t.key===desired)).sort((a,b)=>(save.stats[b.id]?.lastWrong?1:0)-(save.stats[a.id]?.lastWrong?1:0)||(save.stats[a.id]?.times||0)-(save.stats[b.id]?.times||0))[0]
+  });
+  const result=shuffled(picked),demoPair=wordPair.get(s.demo.prompt);if(result.length>1&&wordPair.get(result[0].prompt)===demoPair)result.push(result.shift());return result
+ }
+ if(s.n===12){let chosen=[];['А','Б','В','Г','Д'].forEach((x,i)=>chosen.push(...pool.filter(t=>t.series===x).slice(0,[4,4,4,2,1][i])));return shuffled(chosen)}
+ return shuffled(pool.slice(0,count))
 }
 function firstStageMenu(){let s=DATA.steps[0],ext=s.extension,score=save.results[1]?.best||0,extra=save.extensionResults[1];
  setView(`<div class="eyebrow">Ступень 1 · Step 1</div><h2>${esc(s.title)}</h2><section class="panel phase-panel"><h3>Этап 1 · Сравните слоги</h3><p class="en">Stage 1 · Compare syllables</p><p>15 заданий · Каждый парный согласный один раз.</p><p class="en">15 questions · One question for each paired consonant.</p>${save.results[1]?`<p>Лучший результат · Best: ${score}%</p>`:''}<button id="stageSyllables" class="primary">${save.active?.n===1&&save.active.phase!=='words'?'Продолжить · Continue':'Начать · Start'}</button></section><section class="panel"><h3>Этап 2 · Ударный слог в слове</h3><p class="en">Stage 2 · Stressed syllable in a word</p><p>15 слов за проход · В банке 63 пары слогов.</p><p class="en">15 words per round · 63 syllable contrasts in the bank.</p>${extra?`<p>Лучший результат · Best: ${extra.best}%</p>`:''}${!ext.ready?'<p>Для этого этапа готовятся записи слов.</p><p class="en">Word recordings for this stage are being prepared.</p>':score<70?'<p>Наберите 70% на этапе 1.</p><p class="en">Score 70% in Stage 1 to continue.</p>':''}<button id="stageWords" class="primary" ${!ext.ready||score<70?'disabled':''}>${!ext.ready?'Готовятся записи · Audio pending':score<70?'Закрыто · Locked':'Начать · Start'}</button></section><button id="back">К лестнице · Back</button>`);
